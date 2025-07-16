@@ -1,0 +1,656 @@
+{
+  "name": "Telecom RAG Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telecom-rag-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*",
+          "rawBody": true
+        }
+      },
+      "id": "98cd09dd-7db1-4cce-aacd-051359142da9",
+      "name": "Enhanced Webhook Entry",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        -2400,
+        700
+      ],
+      "webhookId": "telecom-rag-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced request processing and validation\nconst body = $input.item.json.body;\nconst headers = $input.item.json.headers;\n\n// Extract and validate the request\nlet requestData;\ntry {\n  requestData = typeof body === 'string' ? JSON.parse(body) : body;\n} catch (e) {\n  return {\n    json: {\n      error: 'Invalid JSON in request body',\n      status: 400\n    }\n  };\n}\n\n// Validate required fields\nif (!requestData.query || typeof requestData.query !== 'string') {\n  return {\n    json: {\n      error: 'Missing or invalid query field',\n      status: 400\n    }\n  };\n}\n\n// Extract session and context information\nconst sessionId = requestData.sessionId || `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;\nconst userId = requestData.userId || 'anonymous';\nconst conversationHistory = requestData.conversationHistory || [];\n\n// Clean and prepare the query\nconst query = requestData.query.trim();\nconst queryMetadata = {\n  timestamp: new Date().toISOString(),\n  source: 'lovable_chat',\n  userAgent: headers['user-agent'] || 'unknown',\n  ipAddress: headers['x-forwarded-for'] || headers['x-real-ip'] || 'unknown'\n};\n\n// Prepare enhanced request object\nconst enhancedRequest = {\n  query: query,\n  sessionId: sessionId,\n  userId: userId,\n  conversationHistory: conversationHistory,\n  metadata: queryMetadata,\n  requestId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,\n  timestamp: new Date().toISOString()\n};\n\nconsole.log(`📥 Enhanced RAG Request: ${enhancedRequest.requestId}`);\nconsole.log(`👤 User: ${userId} | Session: ${sessionId}`);\nconsole.log(`💬 Query: ${query}`);\n\nreturn {\n  json: enhancedRequest\n};"
+      },
+      "id": "157dd9fa-89bb-40f9-8ef9-15eb1de5bb54",
+      "name": "Enhanced Request Processor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2180,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a telecom network query classifier. Analyze user queries and classify them into specific categories for proper routing.\\n\\nClassification Categories:\\n- DATA_QUERY: Simple data retrieval (\\\"show me dropped calls\\\", \\\"list towers in region X\\\")\\n- ANALYSIS: Complex analysis requiring reasoning (\\\"compare performance trends\\\", \\\"analyze failure patterns\\\")\\n- PREDICTION: Predictive or recommendation queries (\\\"which towers need attention\\\", \\\"predict failures\\\")\\n- VISUALIZATION: Chart/dashboard requests (\\\"create a chart\\\", \\\"show me a dashboard\\\")\\n- CONVERSATION: General conversation or unclear intent (\\\"hello\\\", \\\"help\\\", unclear queries)\\n\\nRespond with only the category name and a confidence score (0-100).\\nFormat: CATEGORY|CONFIDENCE\\nExample: ANALYSIS|95\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"={{ $json.query }}\"\n    }\n  ],\n  \"max_tokens\": 50,\n  \"temperature\": 0.1\n}",
+        "options": {}
+      },
+      "id": "a984a4f7-a4c4-4c21-9579-7881d1c0c101",
+      "name": "Smart Query Classifier",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1960,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process OpenRouter classification response\nconst response = $input.item.json;\nconst originalRequest = $('Enhanced Request Processor').item.json;\n\n// Extract classification from OpenRouter response\nlet classification = 'CONVERSATION';\nlet confidence = 50;\n\ntry {\n  const content = response.choices[0].message.content.trim();\n  const [category, conf] = content.split('|');\n  \n  classification = category.trim();\n  confidence = parseInt(conf) || 50;\n  \n  console.log(`🤖 Classification: ${classification} (${confidence}% confidence)`);\n} catch (e) {\n  console.log('⚠️ Classification parsing failed, defaulting to CONVERSATION');\n}\n\n// Enhance the request with classification\nconst classifiedRequest = {\n  ...originalRequest,\n  classification: {\n    category: classification,\n    confidence: confidence,\n    timestamp: new Date().toISOString()\n  }\n};\n\nreturn {\n  json: classifiedRequest\n};"
+      },
+      "id": "af11d3ca-2f7a-42da-896b-5286f07b3037",
+      "name": "Classification Processor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1740,
+        705
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "data-query-condition",
+              "leftValue": "={{ $json.classification.category }}",
+              "rightValue": "DATA_QUERY",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "22f64101-50d8-4c33-9e73-d145c3763621",
+      "name": "Route: Data Query",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1520,
+        255
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "analysis-condition",
+              "leftValue": "={{ $json.classification.category }}",
+              "rightValue": "ANALYSIS",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "2b8270e8-e301-409a-9344-b51d42ee3e0f",
+      "name": "Route: Analysis",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1300,
+        555
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "prediction-condition",
+              "leftValue": "={{ $json.classification.category }}",
+              "rightValue": "PREDICTION",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5f2ab50-c90d-41c3-adc6-9b6bb351e54c",
+      "name": "Route: Prediction",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1300,
+        855
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "visualization-condition",
+              "leftValue": "={{ $json.classification.category }}",
+              "rightValue": "VISUALIZATION",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b4952d78-3e0a-4016-ac5c-de6bff3eb1d5",
+      "name": "Route: Visualization",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1300,
+        1105
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4o\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a Neo4j Cypher query translator for telecom network data. Convert natural language questions into precise Cypher queries.\\n\\nDatabase Schema:\\n- Nodes: Interaction (CallID, Type, Duration, StartTime, Status), Tower (towerId, latitude, longitude), Carrier (name)\\n- Relationships: OCCURRED_AT (Interaction->Tower), ORIGINATED_FROM (Interaction->Tower), HANDLED_BY (Interaction->Carrier)\\n\\nGenerate only the JSON body for Neo4j HTTP API with 'statements' array. No explanation.\\n\\nExample output:\\n{\\n  \\\"statements\\\": [\\n    {\\n      \\\"statement\\\": \\\"MATCH (i:Interaction)-[:OCCURRED_AT]->(t:Tower) WHERE i.Status = 'DROPPED' RETURN i, t LIMIT 10\\\",\\n      \\\"parameters\\\": {}\\n    }\\n  ]\\n}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"={{ $json.query }}\"\n    }\n  ],\n  \"max_tokens\": 500,\n  \"temperature\": 0.1\n}",
+        "options": {}
+      },
+      "id": "0e009fb2-8c90-45e0-8a68-56dc89afba9c",
+      "name": "NL to Cypher Translator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1300,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0877-68-118-242-43.ngrok-free.app/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.choices[0].message.content }}",
+        "options": {}
+      },
+      "id": "687a4312-277b-4067-a4a4-fae10d7c4f94",
+      "name": "Data Retriever",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1080,
+        180
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "3dTs3REKXmtcwC1q",
+          "name": "Neo4j credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"anthropic/claude-3-sonnet\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are an expert telecom network analyst. Provide comprehensive analysis of network data with actionable insights.\\n\\nAnalysis Framework:\\n1. Data Summary: Key findings from the provided data\\n2. Pattern Analysis: Trends, anomalies, correlations\\n3. Root Cause Analysis: Potential causes for issues\\n4. Impact Assessment: Business/operational impact\\n5. Recommendations: Specific, actionable next steps\\n\\nBe detailed but concise. Focus on practical insights for network operations teams.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Query: {{ $('Classification Processor').item.json.query }}\\n\\nProvide comprehensive network analysis.\"\n    }\n  ],\n  \"max_tokens\": 1500,\n  \"temperature\": 0.3\n}",
+        "options": {}
+      },
+      "id": "591f74ea-5958-456b-9653-2167570266eb",
+      "name": "Analysis Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1080,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer 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"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"meta-llama/llama-3.1-70b-instruct\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a predictive analytics expert for telecom networks. Generate predictions and recommendations based on historical data and current patterns.\\n\\nPrediction Framework:\\n1. Historical Pattern Analysis\\n2. Current State Assessment\\n3. Risk Factors Identification\\n4. Probability Scoring (High/Medium/Low)\\n5. Preventive Actions\\n6. Monitoring Recommendations\\n\\nProvide specific, actionable predictions with confidence levels.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Query: {{ $('Classification Processor').item.json.query }}\\n\\nProvide predictive insights for telecom network operations.\"\n    }\n  ],\n  \"max_tokens\": 1200,\n  \"temperature\": 0.4\n}",
+        "options": {}
+      },
+      "id": "73ec6fb9-c49d-416e-9d54-9f739f94f5ee",
+      "name": "Prediction Engine",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1080,
+        780
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate visualization specifications for Lovable frontend\nconst request = $('Classification Processor').item.json;\nconst query = request.query.toLowerCase();\n\n// Determine appropriate visualization type\nlet vizType = 'table';\nlet chartConfig = {};\n\nif (query.includes('chart') || query.includes('graph')) {\n  if (query.includes('line') || query.includes('trend') || query.includes('time')) {\n    vizType = 'line_chart';\n  } else if (query.includes('bar') || query.includes('compare')) {\n    vizType = 'bar_chart';\n  } else if (query.includes('pie') || query.includes('distribution')) {\n    vizType = 'pie_chart';\n  }\n} else if (query.includes('dashboard')) {\n  vizType = 'dashboard';\n} else if (query.includes('map') || query.includes('location') || query.includes('tower')) {\n  vizType = 'map';\n}\n\n// Generate chart configuration\nchartConfig = {\n  type: vizType,\n  title: \"Network Performance Visualization\",\n  data: {\n    labels: ['Tower A', 'Tower B', 'Tower C'],\n    datasets: [{\n      label: 'Dropped Calls',\n      data: [12, 8, 15],\n      backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56']\n    }]\n  },\n  options: {\n    responsive: true,\n    plugins: {\n      legend: {\n        position: 'top'\n      }\n    }\n  }\n};\n\nconst visualizationResponse = {\n  type: 'visualization',\n  vizType: vizType,\n  config: chartConfig,\n  description: \"Generated visualization based on your query\",\n  query: request.query,\n  timestamp: new Date().toISOString()\n};\n\nconsole.log(`📊 Generated ${vizType} visualization config`);\n\nreturn {\n  json: visualizationResponse\n};"
+      },
+      "id": "8bebb9e1-a01f-4cee-ada0-cbfcb455d9f5",
+      "name": "Visualization Generator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1080,
+        1180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a helpful telecom network assistant. Provide conversational responses to general questions and help users understand how to interact with the system.\\n\\nIf users ask unclear questions, help them rephrase. Suggest specific query types like:\\n- Data queries: 'Show me dropped calls for Tower X'\\n- Analysis: 'Compare carrier performance this week'\\n- Predictions: 'Which towers might fail soon?'\\n- Visualizations: 'Create a chart showing network trends'\\n\\nBe friendly and helpful.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $('Classification Processor').item.json.query }}\"\n    }\n  ],\n  \"max_tokens\": 500,\n  \"temperature\": 0.7\n}",
+        "options": {}
+      },
+      "id": "64fc7612-31ad-42c1-a801-d02ba2c43eb7",
+      "name": "Conversation Handler",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -1080,
+        1380
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "NG5q0ZqCh9MR6NSl",
+          "name": "OpenRouter API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Final response processor - combines all outputs into unified response\nconst request = $('Classification Processor').item.json;\nconst classification = request.classification.category;\n\nlet responseData = {};\nlet aiResponse = '';\nlet dataResults = null;\nlet visualizationConfig = null;\n\n// Process based on classification\nswitch (classification) {\n  case 'DATA_QUERY':\n    try {\n      dataResults = $('Data Retriever').item.json;\n      aiResponse = \"Here's the data you requested:\";\n    } catch (e) {\n      aiResponse = \"I couldn't retrieve the data. Please try rephrasing your query.\";\n    }\n    break;\n    \n  case 'ANALYSIS':\n    try {\n      const analysisResponse = $('Analysis Engine').item.json;\n      aiResponse = analysisResponse.choices[0].message.content;\n    } catch (e) {\n      aiResponse = \"I couldn't complete the analysis. Please try again.\";\n    }\n    break;\n    \n  case 'PREDICTION':\n    try {\n      const predictionResponse = $('Prediction Engine').item.json;\n      aiResponse = predictionResponse.choices[0].message.content;\n    } catch (e) {\n      aiResponse = \"I couldn't generate predictions. Please try again.\";\n    }\n    break;\n    \n  case 'VISUALIZATION':\n    try {\n      visualizationConfig = $('Visualization Generator').item.json;\n      aiResponse = \"I've generated a visualization for you.\";\n    } catch (e) {\n      aiResponse = \"I couldn't create the visualization. Please try again.\";\n    }\n    break;\n    \n  default:\n    try {\n      const conversationResponse = $('Conversation Handler').item.json;\n      aiResponse = conversationResponse.choices[0].message.content;\n    } catch (e) {\n      aiResponse = \"I understand you're asking about telecom network data. Could you please be more specific about what you'd like to know?\";\n    }\n}\n\n// Construct unified response\nconst unifiedResponse = {\n  requestId: request.requestId,\n  sessionId: request.sessionId,\n  query: request.query,\n  classification: request.classification,\n  response: {\n    text: aiResponse,\n    data: dataResults,\n    visualization: visualizationConfig,\n    type: classification.toLowerCase()\n  },\n  metadata: {\n    processingTime: Date.now() - new Date(request.timestamp).getTime(),\n    timestamp: new Date().toISOString(),\n    model_used: getModelUsed(classification)\n  }\n};\n\nfunction getModelUsed(classification) {\n  switch (classification) {\n    case 'DATA_QUERY': return 'gpt-4o';\n    case 'ANALYSIS': return 'claude-3-sonnet';\n    case 'PREDICTION': return 'llama-3.1-70b';\n    case 'VISUALIZATION': return 'internal-generator';\n    default: return 'gpt-4o-mini';\n  }\n}\n\nconsole.log(`✅ Response processed for ${request.requestId}`);\nconsole.log(`⏱️ Processing time: ${unifiedResponse.metadata.processingTime}ms`);\n\nreturn {\n  json: unifiedResponse\n};"
+      },
+      "id": "e6d6e269-b00f-499b-85f0-d5ea2e139f1a",
+      "name": "Response Processor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -860,
+        780
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json, null, 2) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b6c46534-0314-40cd-b01b-9928b579ad9f",
+      "name": "Send Response to Lovable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        780
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Enhanced Webhook Entry": {
+      "main": [
+        [
+          {
+            "node": "Enhanced Request Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enhanced Request Processor": {
+      "main": [
+        [
+          {
+            "node": "Smart Query Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smart Query Classifier": {
+      "main": [
+        [
+          {
+            "node": "Classification Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classification Processor": {
+      "main": [
+        [
+          {
+            "node": "Route: Data Query",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Analysis",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Prediction",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route: Visualization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Data Query": {
+      "main": [
+        [
+          {
+            "node": "NL to Cypher Translator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Analysis": {
+      "main": [
+        [
+          {
+            "node": "Analysis Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Prediction": {
+      "main": [
+        [
+          {
+            "node": "Prediction Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route: Visualization": {
+      "main": [
+        [
+          {
+            "node": "Visualization Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NL to Cypher Translator": {
+      "main": [
+        [
+          {
+            "node": "Data Retriever",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Retriever": {
+      "main": [
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analysis Engine": {
+      "main": [
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prediction Engine": {
+      "main": [
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Visualization Generator": {
+      "main": [
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Conversation Handler": {
+      "main": [
+        [
+          {
+            "node": "Response Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Response Processor": {
+      "main": [
+        [
+          {
+            "node": "Send Response to Lovable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "eb509c18-eec8-48da-bcab-862fda0cae73",
+  "meta": {
+    "instanceId": "aacd7227e8f45038ab916ee813e1b22234b21d0d9a07539b220bb92fdf765338"
+  },
+  "id": "7kDIxU4UiC7wblWU",
+  "tags": []
+}

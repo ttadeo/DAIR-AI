@@ -1,0 +1,555 @@
+{
+  "name": "Telco Demo - Full Integration V2",
+  "nodes": [
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "high-priority-condition",
+              "leftValue": "={{ $('Agent 1: Classifier').item.json.message.content.trim() }}",
+              "rightValue": "High",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "00d62e97-db72-4847-b5a9-e933d95f13cc",
+      "name": "IF High Priority",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        80,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0877-68-118-242-43.ngrok-free.app/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"statements\": [\n    {\n      \"statement\": \"MATCH (i:Interaction)-[:OCCURRED_AT]->(t:Tower) WHERE t.towerId = $towerID AND (i.Status = 'DROPPED' OR i.Status = 'FAILED') AND datetime(i.StartTime) >= datetime() - duration('PT2H') RETURN i.CallID as CallID, i.Type as Type, i.Duration as Duration, i.StartTime as StartTime, i.Status as Status, t.latitude as TowerLat, t.longitude as TowerLon ORDER BY datetime(i.StartTime) DESC LIMIT 10\",\n      \"parameters\": {\n        \"towerID\": \"{{ $json.body.TowerID }}\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "0344063e-fac6-49cb-be3e-874015d76326",
+      "name": "Agent 2: Contextualizer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        620,
+        -100
+      ],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "3dTs3REKXmtcwC1q",
+          "name": "Neo4j credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// We need to get the actual dropped call that triggered this workflow\n// The best approach is to query for the most recent dropped call directly\n\nconst incident = {\n  CallID: \"FETCHING_REAL_CALL_ID...\", // We'll get this from the actual trigger\n  TowerID: \"TWR_0055\",\n  Type: \"VOICE\", \n  Duration: 45,\n  StartTime: new Date().toISOString(),\n  Status: \"DROPPED\"\n};\n\n// Extract context data from Neo4j response  \nconst neo4jResponse = $input.item.json;\nconst results = neo4jResponse.results && neo4jResponse.results[0] && neo4jResponse.results[0].data ? neo4jResponse.results[0].data : [];\n\nconst contextData = results.map(record => {\n  const row = record.row;\n  return {\n    CallID: row[0],\n    Type: row[1], \n    Duration: row[2],\n    StartTime: row[3],\n    Status: row[4],\n    TowerLat: row[5],\n    TowerLon: row[6]\n  };\n});\n\n// Try to get the real call ID from the chain\nlet realCallID = `PRIORITY_${Date.now()}`;\n\n// Check if we can access the original detection data\ntry {\n  // The call ID should be in the Process Detection output\n  const detectionData = $('Process Detection').item.json;\n  if (detectionData && detectionData.body && detectionData.body.CallID) {\n    realCallID = detectionData.body.CallID;\n    incident.CallID = realCallID;\n    incident.Type = detectionData.body.Type || \"VOICE\";\n    incident.Duration = detectionData.body.Duration || 45;\n    incident.StartTime = detectionData.body.StartTime || new Date().toISOString();\n    incident.TowerID = detectionData.body.TowerID || \"TWR_0055\";\n    console.log(`🎯 Found real call data: ${realCallID}`);\n  }\n} catch (e) {\n  console.log(\"Could not access Process Detection data:\", e.message);\n}\n\nreturn {\n  json: {\n    incident: incident,\n    contextData: contextData,\n    totalRecords: contextData.length,\n    rawNeo4jResponse: neo4jResponse\n  }\n};"
+      },
+      "id": "333e16a0-0e51-4bc7-af21-f1b3aafd3e16",
+      "name": "Process Neo4j Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "fields": {
+          "values": [
+            {
+              "name": "incident_summary",
+              "stringValue": "=🚨 HIGH PRIORITY NETWORK INCIDENT\n\n{{ $json.message.content }}\n\n**Context Records Found:** {{ $('Process Neo4j Response').item.json.totalRecords }}\n**Incident Time:** {{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c35ceb18-9e8d-46ec-a384-247d777429ba",
+      "name": "Agent 4: Format Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        1432,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#network-alerts",
+          "mode": "name"
+        },
+        "text": "=🚨 HIGH PRIORITY NETWORK INCIDENT\n\n╔══════════════════════════════════════╗\n║             INCIDENT ALERT           ║\n╚══════════════════════════════════════╝\n\n🆔 **Call ID:** {{ $('Process Neo4j Response').item.json.incident.CallID }}\n🗼 **Tower ID:** {{ $('Process Neo4j Response').item.json.incident.TowerID }}\n📱 **Service Type:** {{ $('Process Neo4j Response').item.json.incident.Type }}\n⚠️ **Status:** {{ $('Process Neo4j Response').item.json.incident.Status }} (HIGH PRIORITY)\n⏱️ **Call Duration:** {{ $('Process Neo4j Response').item.json.incident.Duration }} seconds\n🕐 **Incident Time:** {{ $('Process Neo4j Response').item.json.incident.StartTime }}\n\n╔══════════════════════════════════════╗\n║            CONTEXT ANALYSIS          ║\n╚══════════════════════════════════════╝\n\n📊 **Related Incidents:** {{ $('Process Neo4j Response').item.json.totalRecords }} in last 24 hours\n🎯 **AI Priority:** HIGH SEVERITY\n🔍 **Pattern Status:** {{ $('Process Neo4j Response').item.json.totalRecords === 0 ? 'Isolated Incident' : 'Pattern Detected' }}\n\n╔══════════════════════════════════════╗\n║             AI ANALYSIS              ║\n╚══════════════════════════════════════╝\n\n{{ $('Agent 3: Analyst').item.json.message.content }}\n\n╔══════════════════════════════════════╗\n║           IMMEDIATE ACTIONS          ║\n╚══════════════════════════════════════╝\n\n🔧 **1. Check Tower:** {{ $('Process Neo4j Response').item.json.incident.TowerID }} hardware status\n📡 **2. Service Check:** Verify {{ $('Process Neo4j Response').item.json.incident.Type }} service quality\n⏰ **3. Duration Analysis:** {{ $('Process Neo4j Response').item.json.incident.Duration }}s drop pattern analysis\n👥 **4. Team Alert:** Notify field engineers for tower inspection\n\n**🚨 Workflow Alert Generated:** {{ $now }}\n**📋 Execution ID:** {{ $execution.id }}",
+        "otherOptions": {}
+      },
+      "id": "eba2aaf8-8642-437a-8e28-2ba2cf0bb68d",
+      "name": "Agent 4: Send to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        -180
+      ],
+      "webhookId": "f340c7fe-652b-4bcd-87b2-9a235ed949ef",
+      "credentials": {
+        "slackApi": {
+          "id": "kXEWObLwklzfkFfB",
+          "name": "Slack Account - Telco Demo"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Incident processed successfully - {{ $('Process Neo4j Response').item.json.totalRecords }} related records analyzed",
+        "options": {}
+      },
+      "id": "deba39a2-b56d-4eff-80b0-b603ac54b30c",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1380,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-3.5-turbo",
+          "mode": "list",
+          "cachedResultName": "GPT-3.5-TURBO"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a telecom incident classifier. Analyze Call Detail Records (CDRs) for dropped calls and classify their severity. Respond with ONLY one word: either 'High' or 'Low'.",
+              "role": "system"
+            },
+            {
+              "content": "=Classify this dropped call CDR:\n\nCallID: {{ $json.body.CallID }}\nType: {{ $json.body.Type }}\nDuration: {{ $json.body.Duration }} seconds\nStartTime: {{ $json.body.StartTime }}\nStatus: {{ $json.body.Status }}\nTowerID: {{ $json.body.TowerID }}\n\nClassification Criteria:\n- HIGH: Voice calls dropped after 30+ seconds, or Data sessions dropped after 60+ seconds\n- LOW: All other dropped calls/sessions\n\nRespond with only: High or Low"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1000,
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        -340,
+        240
+      ],
+      "id": "6428b583-0f62-4073-b4d2-80f8c28a8364",
+      "name": "Agent 1: Classifier",
+      "credentials": {
+        "openAiApi": {
+          "id": "Z6H4LV8g5sQgdIQm",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4",
+          "mode": "list",
+          "cachedResultName": "GPT-4"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are a telecom network analyst. Generate comprehensive incident analysis reports for network operations teams. Be concise but thorough.",
+              "role": "system"
+            },
+            {
+              "content": "=Analyze this network incident:\n\n## CURRENT HIGH-PRIORITY INCIDENT\nA high-priority dropped call has been detected requiring immediate analysis.\n\n## RECENT CONTEXT FROM SAME TOWER\nContext records from the last 2 hours: {{ JSON.stringify($json.contextData, null, 2) }}\nTotal context records found: {{ $json.totalRecords }}\n\n## ANALYSIS REQUIRED\nBased on the available information, provide a structured analysis including:\n1. **Incident Summary**: Overview of the current high-priority dropped call incident\n2. **Pattern Analysis**: Analysis of recent activity patterns ({{ $json.totalRecords }} related records found)\n3. **Potential Root Cause**: Possible causes for the dropped call based on context\n4. **Severity Assessment**: How concerning is this incident given the context?\n5. **Recommended Actions**: What should the network operations team do next?\n\nNote: This is a high-priority incident that has been classified as requiring immediate attention.\n\nKeep your response concise but informative, suitable for immediate action by network operations."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1000,
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1060,
+        -180
+      ],
+      "id": "4ab4ac94-68ac-4ceb-8fb1-ac9095e9198c",
+      "name": "Agent 3: Analyst",
+      "credentials": {
+        "openAiApi": {
+          "id": "Z6H4LV8g5sQgdIQm",
+          "name": "OpenAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        -540
+      ],
+      "id": "cd8e5745-bcb8-4145-8e81-60a8f7350c2b",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://0877-68-118-242-43.ngrok-free.app/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"statements\": [\n    {\n      \"statement\": \"MATCH (i:Interaction)-[:ORIGINATED_FROM]->(t:Tower) WHERE (i.Status = 'DROPPED' OR i.Status = 'FAILED') AND datetime(i.StartTime) >= datetime({timezone: 'America/New_York'}) - duration('PT48H') RETURN i.CallID as CallID, i.Type as Type, i.Duration as Duration, i.StartTime as StartTime, i.Status as Status, t.towerId as TowerID ORDER BY datetime(i.StartTime) DESC LIMIT 10\"\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -820,
+        -320
+      ],
+      "id": "16f3601e-ba7c-4ad6-b7c3-4eef7121ca15",
+      "name": "Detected Dropped Calls",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "3dTs3REKXmtcwC1q",
+          "name": "Neo4j credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Neo4j response to extract dropped call data\nconst neo4jResponse = $input.item.json;\n\n// Correctly access the data array from the first result set\nconst dataArray = neo4jResponse.results?.[0]?.data || [];\n\nif (dataArray.length > 0) {\n  // If we have data, format each dropped call and return it as a list\n  const droppedCalls = dataArray.map(item => {\n    // The data for a single call is in the 'row' property\n    const row = item.row;\n    \n    // Format the data to look like the webhook body\n    const droppedCall = {\n      body: {\n        CallID: row[0],\n        Type: row[1],\n        Duration: row[2],\n        StartTime: row[3],\n        Status: row[4],\n        TowerID: row[5],\n        // Assuming Carrier might be the 7th item if you add it to the query\n        // Carrier: row[6] \n      }\n    };\n    \n    console.log(`✅ Detected dropped call: ${droppedCall.body.CallID}`);\n    return { json: droppedCall };\n  });\n\n  return droppedCalls;\n\n} else {\n  // No dropped calls found - stop workflow\n  console.log('🚫 No new dropped calls found');\n  return null;\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -80,
+        -320
+      ],
+      "id": "747b3eab-5e0f-4a52-9dd0-2b2db70e7dc2",
+      "name": "Process Detection"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "65648247-dc4e-498f-9a49-c40a3aed8e41",
+              "leftValue": "={{ $json.body.CallID }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        -320
+      ],
+      "id": "5d24ecab-9550-41b5-bd6d-7ac7aed38779",
+      "name": "IF New Dropped Call"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://0d90-68-118-242-43.ngrok-free.app/webhook/start-demo",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"duration_minutes\": 5}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -660,
+        -540
+      ],
+      "id": "e90f840f-b5f6-49e8-a5c2-13942993c670",
+      "name": "Start Data Generation"
+    },
+    {
+      "parameters": {
+        "amount": 30
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -380,
+        -540
+      ],
+      "id": "61953086-8199-4626-8620-e1397e8d2830",
+      "name": "Wait",
+      "webhookId": "1ae9a8a4-4b29-4fdd-8718-fa4a7f9ed13f"
+    }
+  ],
+  "pinData": {
+    "Schedule Trigger": [
+      {
+        "json": {
+          "timestamp": "2025-06-26T21:17:00.001-04:00",
+          "Readable date": "June 26th 2025, 9:17:00 pm",
+          "Readable time": "9:17:00 pm",
+          "Day of week": "Thursday",
+          "Year": "2025",
+          "Month": "June",
+          "Day of month": "26",
+          "Hour": "21",
+          "Minute": "17",
+          "Second": "00",
+          "Timezone": "America/New_York (UTC-04:00)"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "IF High Priority": {
+      "main": [
+        [
+          {
+            "node": "Agent 2: Contextualizer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 2: Contextualizer": {
+      "main": [
+        [
+          {
+            "node": "Process Neo4j Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Neo4j Response": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 3: Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 4: Format Message": {
+      "main": [
+        [
+          {
+            "node": "Agent 4: Send to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 4: Send to Slack": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 1: Classifier": {
+      "main": [
+        [
+          {
+            "node": "IF High Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 3: Analyst": {
+      "main": [
+        [
+          {
+            "node": "Agent 4: Format Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detected Dropped Calls": {
+      "main": [
+        [
+          {
+            "node": "Process Detection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Start Data Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Detection": {
+      "main": [
+        [
+          {
+            "node": "IF New Dropped Call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF New Dropped Call": {
+      "main": [
+        [
+          {
+            "node": "Agent 1: Classifier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Data Generation": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Detected Dropped Calls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "513ef25e-4ad2-4e29-b250-b04b65e7f2ab",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "aacd7227e8f45038ab916ee813e1b22234b21d0d9a07539b220bb92fdf765338"
+  },
+  "id": "fDsIojQEdBshzyHt",
+  "tags": []
+}
